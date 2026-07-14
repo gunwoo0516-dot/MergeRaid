@@ -28,6 +28,9 @@ var second_wind_used := false
 var first_attack_this_stage := true
 var consecutive_merge_turns := 0
 var focus_ready := false
+var permanent_attack_bonus_percent := 0
+var starting_passive := "steady_start"
+var core_keeper_bonus_percent := 0
 
 
 func reset_for_new_run() -> void:
@@ -51,6 +54,18 @@ func reset_for_new_run() -> void:
 	first_attack_this_stage = true
 	consecutive_merge_turns = 0
 	focus_ready = false
+	permanent_attack_bonus_percent = 0
+	starting_passive = "steady_start"
+	core_keeper_bonus_percent = 0
+
+
+func apply_meta_bonuses(permanent_percent: int, passive_id: String) -> void:
+	permanent_attack_bonus_percent = clampi(permanent_percent, 0, 50)
+	starting_passive = passive_id
+	match passive_id:
+		"steady_start": shield = 10
+		"core_keeper": core_keeper_bonus_percent = 5
+		"breaker": break_max_charges += 1; break_current_charges += 1
 
 
 func apply_upgrade(upgrade_id: String) -> void:
@@ -66,6 +81,7 @@ func apply_upgrade(upgrade_id: String) -> void:
 			break_max_charges += 1
 			break_current_charges += 1
 		"stage_preparation": pass
+		"quick_step", "momentum", "fever_charge", "fever_power", "long_fever", "hot_start": pass
 		_: pass
 
 
@@ -86,13 +102,14 @@ func update_largest_tile(value: int) -> void:
 	elif value >= 128: base_bonus = 20
 	elif value >= 64: base_bonus = 10
 	var giant_level := get_upgrade_level("giant_strength")
-	large_tile_bonus_percent = base_bonus + (giant_level * 4 if base_bonus > 0 else 0)
+	large_tile_bonus_percent = base_bonus + (giant_level * 4 if base_bonus > 0 else 0) + (core_keeper_bonus_percent if base_bonus > 0 else 0)
 
 
 func get_final_merge_damage(base_damage: int, base_combo_bonus: int, context: Dictionary = {}) -> int:
 	var combo := base_combo_bonus
 	combo += roundi(float(base_damage) * float(combo_bonus_percent) / 100.0)
-	var additive_percent := attack_bonus_percent + large_tile_bonus_percent
+	var additive_percent := attack_bonus_percent + large_tile_bonus_percent + permanent_attack_bonus_percent
+	additive_percent += int(context.get("speed_bonus_percent", 0))
 	var largest_merge := int(context.get("largest_merge", 0))
 	var merge_count := int(context.get("merge_count", 1))
 	if largest_merge >= 32:
@@ -109,7 +126,7 @@ func get_final_merge_damage(base_damage: int, base_combo_bonus: int, context: Di
 	var finisher_level := get_upgrade_level("finisher")
 	if finisher_level > 0:
 		combo += roundi(float(largest_merge) * float(finisher_level) * 0.12)
-	return maxi(1, roundi(float(base_damage + combo) * (1.0 + float(additive_percent) / 100.0)))
+	return maxi(1, roundi(float(base_damage + combo) * (1.0 + float(additive_percent) / 100.0) * float(context.get("fever_multiplier", 1.0))))
 
 
 func get_final_combo_bonus(base_bonus: int) -> int:
@@ -118,7 +135,7 @@ func get_final_combo_bonus(base_bonus: int) -> int:
 
 func get_final_ultimate_damage(base_damage: int) -> int:
 	var overflow_bonus := overflow_stacks * get_upgrade_level("overflow") * 12
-	var additive := ultimate_damage_bonus_percent + large_tile_bonus_percent + overflow_bonus
+	var additive := ultimate_damage_bonus_percent + large_tile_bonus_percent + overflow_bonus + permanent_attack_bonus_percent
 	return maxi(1, roundi(float(base_damage) * (1.0 + float(additive) / 100.0) * BASE_ULTIMATE_MULTIPLIER))
 
 

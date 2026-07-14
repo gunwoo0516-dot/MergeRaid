@@ -140,6 +140,16 @@ func play_break() -> void:
 func play_shield() -> void:
 	_play("shield", 1.15, -4.0)
 
+func play_meta_event(event_id: String) -> void:
+	# Phase 3 events use existing procedural/optional streams, so missing assets
+	# never block progression.
+	match event_id:
+		"soul", "unlock", "power": _play("upgrade_select", 1.2, -4.0, "UI")
+		"speed": _play("merge", 1.3, -10.0)
+		"fever": _play("ultimate_full", 1.08, -4.0)
+		"debuff": _play("player_hit", 0.82, -6.0)
+		_: _play("ui_click", 1.0, -8.0, "UI")
+
 
 func play_bgm(track_id: String, fade_duration: float = 0.35) -> void:
 	if track_id == _current_bgm and _bgm_player.playing:

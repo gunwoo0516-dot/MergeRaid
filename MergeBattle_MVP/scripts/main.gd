@@ -7,6 +7,10 @@ const RunStateScript = preload("res://scripts/run_state.gd")
 const UpgradeSystemScript = preload("res://scripts/upgrade_system.gd")
 const UpgradeCardScript = preload("res://scripts/upgrade_card.gd")
 const BuildPanelScript = preload("res://scripts/build_panel.gd")
+const SaveManagerScript = preload("res://scripts/save_manager.gd")
+const MetaProgressionScript = preload("res://scripts/meta_progression.gd")
+const SpeedComboScript = preload("res://scripts/speed_combo_system.gd")
+const EnemyDatabaseScript = preload("res://scripts/enemy_database.gd")
 
 const BOARD_SIZE: int = 4
 const TILE_SIZE := Vector2(132.0, 132.0)
@@ -28,6 +32,13 @@ var logic = BoardLogicScript.new()
 var rng := RandomNumberGenerator.new()
 var run_state: RunState = RunStateScript.new()
 var upgrade_system: UpgradeSystem = UpgradeSystemScript.new()
+var save_manager: SaveManager = SaveManagerScript.new()
+var meta_progression: MetaProgression = MetaProgressionScript.new()
+var speed_combo: SpeedComboSystem = SpeedComboScript.new()
+var current_enemy: Dictionary = {}
+var selected_passive := "steady_start"
+var run_souls_earned := 0
+var run_recorded := false
 
 var tile_panels: Array[PanelContainer] = []
 var tile_labels: Array[Label] = []
@@ -90,10 +101,20 @@ var build_overlay: ColorRect
 var build_panel: BuildPanel
 var build_button: Button
 var sound_button: Button
+var soul_label: Label
+var speed_label: Label
+var speed_bar: ProgressBar
+var fever_label: Label
+var fever_bar: ProgressBar
+var enemy_trait_label: Label
+var meta_overlay: ColorRect
+var meta_content: VBoxContainer
 
 
 func _ready() -> void:
 	rng.randomize()
+	save_manager.load_save()
+	selected_passive = save_manager.last_starting_passive if save_manager.is_unlocked(save_manager.last_starting_passive) else "steady_start"
 	_build_screen()
 	_start_new_game()
 	AudioManager.play_bgm("battle")
@@ -211,28 +232,23 @@ func _handle_debug_key(keycode: Key) -> bool:
 				_show_upgrade_selection()
 			return true
 		KEY_F7:
-			run_state.break_current_charges += 1
-			run_state.break_max_charges = maxi(run_state.break_max_charges, run_state.break_current_charges)
+			save_manager.add_souls(10)
 			_refresh_all_ui()
-			status_label.text = "DEBUG: Break charge +1"
+			status_label.text = "DEBUG: Soul +10"
 			return true
 		KEY_F8:
-			var hp_ratio := float(player_hp) / float(maxi(1, run_state.get_player_max_hp()))
-			run_state.reset_for_new_run()
-			player_hp = maxi(1, roundi(float(run_state.get_player_max_hp()) * hp_ratio))
-			_set_ultimate_gauge(0.0)
-			_update_large_tile_passive()
+			save_manager.reset_save_for_debug()
 			_refresh_all_ui()
-			status_label.text = "DEBUG: Run upgrades reset"
+			status_label.text = "DEBUG: Meta save reset"
 			return true
 		KEY_F9:
-			AudioManager.play_merge(64, 2)
+			speed_combo.stack = SpeedComboSystem.MAX_STACK; speed_combo.best_stack = maxi(speed_combo.best_stack, speed_combo.stack); speed_combo.last_move_msec = Time.get_ticks_msec(); _refresh_speed_ui()
 			return true
 		KEY_F10:
-			AudioManager.play_ultimate()
+			speed_combo.fever_gauge = 100.0; _refresh_speed_ui()
 			return true
 		KEY_F11:
-			_toggle_sound()
+			stage += 1; run_state.current_stage = stage; turn_count = 0; _set_enemy_for_stage(); _refresh_all_ui()
 			return true
 	return false
 
@@ -265,6 +281,7 @@ func _build_screen() -> void:
 	_build_upgrade_overlay()
 	_build_build_overlay()
 	_build_game_over_overlay()
+	_build_meta_overlay()
 
 
 func _build_header(parent: VBoxContainer) -> void:
@@ -297,6 +314,10 @@ func _build_header(parent: VBoxContainer) -> void:
 	meta_label.add_theme_font_size_override("font_size", 13)
 	meta_label.add_theme_color_override("font_color", Color("#756A61"))
 	info_box.add_child(meta_label)
+	soul_label = Label.new()
+	soul_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	soul_label.add_theme_font_size_override("font_size", 16)
+	info_box.add_child(soul_label)
 
 
 func _build_player_row(parent: VBoxContainer) -> void:
@@ -434,6 +455,11 @@ func _build_enemy_panel(parent: VBoxContainer) -> void:
 	attack_interval_label.add_theme_font_size_override("font_size", 14)
 	attack_interval_label.add_theme_color_override("font_color", Color("#8A5A52"))
 	enemy_box.add_child(attack_interval_label)
+	enemy_trait_label = Label.new()
+	enemy_trait_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	enemy_trait_label.add_theme_font_size_override("font_size", 14)
+	enemy_trait_label.add_theme_color_override("font_color", Color("#74534D"))
+	enemy_box.add_child(enemy_trait_label)
 
 	var enemy_hp_row := HBoxContainer.new()
 	enemy_box.add_child(enemy_hp_row)
@@ -520,6 +546,12 @@ func _build_board(parent: VBoxContainer) -> void:
 
 
 func _build_action_area(parent: VBoxContainer) -> void:
+	var speed_row := HBoxContainer.new()
+	parent.add_child(speed_row)
+	speed_label = Label.new(); speed_label.custom_minimum_size = Vector2(100, 0); speed_row.add_child(speed_label)
+	speed_bar = ProgressBar.new(); speed_bar.show_percentage = false; speed_bar.max_value = 100; speed_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL; speed_row.add_child(speed_bar)
+	fever_label = Label.new(); fever_label.custom_minimum_size = Vector2(110, 0); speed_row.add_child(fever_label)
+	fever_bar = ProgressBar.new(); fever_bar.show_percentage = false; fever_bar.max_value = 100; fever_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL; fever_bar.add_theme_stylebox_override("fill", _create_box_style(Color("#FF7A45"), 7)); speed_row.add_child(fever_bar)
 	var gauge_row := HBoxContainer.new()
 	gauge_row.add_theme_constant_override("separation", 10)
 	parent.add_child(gauge_row)
@@ -720,7 +752,7 @@ func _build_game_over_overlay() -> void:
 	overlay_center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
 	var dialog := PanelContainer.new()
-	dialog.custom_minimum_size = Vector2(510.0, 320.0)
+	dialog.custom_minimum_size = Vector2(540.0, 610.0)
 	dialog.add_theme_stylebox_override(
 		"panel",
 		_create_box_style(Color("#F7F3EA"), 20)
@@ -745,6 +777,7 @@ func _build_game_over_overlay() -> void:
 	game_over_reason_label = Label.new()
 	game_over_reason_label.text = ""
 	game_over_reason_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	game_over_reason_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	game_over_reason_label.add_theme_font_size_override("font_size", 23)
 	game_over_reason_label.add_theme_color_override("font_color", Color("#5F574F"))
 	box.add_child(game_over_reason_label)
@@ -755,6 +788,67 @@ func _build_game_over_overlay() -> void:
 	retry_button.add_theme_font_size_override("font_size", 25)
 	retry_button.pressed.connect(_start_new_game)
 	box.add_child(retry_button)
+	var meta_button := Button.new(); meta_button.text = "META"; meta_button.custom_minimum_size = Vector2(0, 58); meta_button.pressed.connect(_show_meta_overlay); box.add_child(meta_button)
+	var build_button_game_over := Button.new(); build_button_game_over.text = "NEW BUILD"; build_button_game_over.custom_minimum_size = Vector2(0, 58); build_button_game_over.pressed.connect(_show_passive_picker); box.add_child(build_button_game_over)
+
+
+func _build_meta_overlay() -> void:
+	meta_overlay = ColorRect.new(); meta_overlay.color = Color(0.05, 0.04, 0.06, 0.9); meta_overlay.mouse_filter = Control.MOUSE_FILTER_STOP; meta_overlay.visible = false; add_child(meta_overlay); meta_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var center := CenterContainer.new(); meta_overlay.add_child(center); center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var panel := PanelContainer.new(); panel.custom_minimum_size = Vector2(620, 900); panel.add_theme_stylebox_override("panel", _create_box_style(Color("#F7F3EA"), 18)); center.add_child(panel)
+	var margin := _create_margin_container(24, 20, 24, 20); panel.add_child(margin)
+	var scroll := ScrollContainer.new(); scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED; margin.add_child(scroll)
+	meta_content = VBoxContainer.new(); meta_content.custom_minimum_size = Vector2(540, 0); meta_content.add_theme_constant_override("separation", 9); scroll.add_child(meta_content)
+
+
+func _show_meta_overlay() -> void:
+	AudioManager.play_ui_click(); speed_combo.stop_for_modal(); meta_overlay.visible = true; input_enabled = false
+	for child: Node in meta_content.get_children(): child.queue_free()
+	_add_meta_label("CAMP / META", 34)
+	_add_meta_label("Souls: %d\nBest Stage: %d\nTotal Runs: %d\nStage Clears: %d\nPermanent Power: Lv.%d (+%d%%)" % [save_manager.souls, save_manager.best_stage, save_manager.total_runs, save_manager.total_stage_clears, save_manager.permanent_power_level, save_manager.get_permanent_attack_bonus_percent()], 19)
+	var power := Button.new(); power.text = "POWER UP  |  Cost 5  |  Next +5%%" if save_manager.permanent_power_level < 10 else "POWER UP  |  MAX +50%"; power.disabled = save_manager.souls < 5 or save_manager.permanent_power_level >= 10; power.pressed.connect(_buy_power); meta_content.add_child(power)
+	_add_meta_label("STARTING PASSIVES", 23)
+	for passive_id: String in MetaProgression.PASSIVES:
+		_add_unlock_button(passive_id, MetaProgression.PASSIVES[passive_id])
+	_add_meta_label("UPGRADE PACKS", 23)
+	for pack_id: String in MetaProgression.PACKS: _add_unlock_button(pack_id, MetaProgression.PACKS[pack_id])
+	_add_meta_label("ARCHER / MAGE / GREATSWORD / BOW / STAFF\nComing in Phase 4", 18)
+	var close := Button.new(); close.text = "CLOSE"; close.custom_minimum_size = Vector2(0, 56); close.pressed.connect(_hide_meta_overlay); meta_content.add_child(close)
+
+
+func _add_meta_label(text: String, font_size: int) -> void:
+	var label := Label.new(); label.text = text; label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART; label.add_theme_font_size_override("font_size", font_size); meta_content.add_child(label)
+
+
+func _add_unlock_button(content_id: String, data: Dictionary) -> void:
+	var button := Button.new(); var unlocked := save_manager.is_unlocked(content_id)
+	button.text = "%s  |  %s" % [str(data["name"]), "UNLOCKED" if unlocked else "Soul %d" % int(data["cost"])]
+	if data.has("effect"): button.text += "\n" + str(data["effect"])
+	button.disabled = unlocked or save_manager.souls < int(data["cost"]); button.pressed.connect(_buy_unlock.bind(content_id)); meta_content.add_child(button)
+
+
+func _buy_power() -> void:
+	if save_manager.buy_permanent_power(): AudioManager.play_meta_event("power"); _show_meta_overlay(); _refresh_all_ui()
+
+
+func _buy_unlock(content_id: String) -> void:
+	if meta_progression.purchase(save_manager, content_id): AudioManager.play_meta_event("unlock"); _show_meta_overlay(); _refresh_all_ui()
+
+
+func _hide_meta_overlay() -> void:
+	meta_overlay.visible = false; speed_combo.resume_after_modal(); input_enabled = not game_is_over and not stage_clear_pending and not is_animating
+
+
+func _show_passive_picker() -> void:
+	_show_meta_overlay()
+	_add_meta_label("Select an unlocked passive by clicking it below, then PLAY AGAIN.", 17)
+	for passive_id: String in MetaProgression.PASSIVES:
+		if save_manager.is_unlocked(passive_id):
+			var button := Button.new(); button.text = "SELECT " + str(MetaProgression.PASSIVES[passive_id]["name"]); button.pressed.connect(_select_passive.bind(passive_id)); meta_content.add_child(button)
+
+
+func _select_passive(passive_id: String) -> void:
+	selected_passive = passive_id; save_manager.last_starting_passive = passive_id; save_manager.save_game(); _hide_meta_overlay(); _start_new_game()
 
 
 func _start_new_game() -> void:
@@ -765,6 +859,9 @@ func _start_new_game() -> void:
 
 	logic.reset()
 	run_state.reset_for_new_run()
+	run_state.apply_meta_bonuses(save_manager.get_permanent_attack_bonus_percent(), selected_passive)
+	speed_combo.reset()
+	speed_combo.swift_hands = selected_passive == "swift_hands"
 
 	score = 0
 	stage = 1
@@ -779,12 +876,16 @@ func _start_new_game() -> void:
 	pending_player_attacks = 0
 	upgrade_choice_committed = false
 	ultimate_gauge = 0.0
+	if selected_passive == "ultimate_seed": ultimate_gauge = 15.0
+	run_souls_earned = 0
+	run_recorded = false
 	recent_merge_damage = 0
 	ultimate_was_full = false
 
 	game_over_overlay.visible = false
 	upgrade_overlay.visible = false
 	build_overlay.visible = false
+	meta_overlay.visible = false
 	restart_button.disabled = false
 	_clear_transient_effects()
 	player_actor.reset_visual_state()
@@ -823,9 +924,12 @@ func _try_move(direction: int) -> void:
 
 	score += merge_score
 	turn_count += 1
+	var speed_event := speed_combo.record_valid_move(Time.get_ticks_msec())
+	if bool(speed_event["fever_started"]):
+		AudioManager.play_meta_event("fever"); _show_banner("FEVER!", Color("#FF9B54")); _flash_screen(Color(1.0, 0.35, 0.1, 0.18), 0.18)
 	run_state.record_move(not merged_values.is_empty())
 	enemy_attack_due = (
-		turn_count % run_state.get_enemy_attack_interval() == 0
+		turn_count % _get_enemy_attack_interval() == 0
 	)
 	_refresh_score_and_turn()
 	if enemy_attack_due:
@@ -896,6 +1000,8 @@ func _calculate_merge_attack(merged_values: Array) -> Dictionary:
 	var damage: int = run_state.get_final_merge_damage(base_damage, base_combo_bonus, {
 		"largest_merge": largest_merge,
 		"merge_count": merged_values.size(),
+		"speed_bonus_percent": speed_combo.get_damage_bonus_percent(),
+		"fever_multiplier": speed_combo.get_fever_multiplier(),
 	})
 
 	return {
@@ -915,7 +1021,7 @@ func _damage_enemy(damage: int) -> void:
 func _start_enemy_attack(generation: int) -> void:
 	if game_is_over or stage_clear_pending or generation != enemy_generation:
 		return
-	var damage: int = BASE_ENEMY_DAMAGE + (stage - 1) * ENEMY_DAMAGE_GROWTH
+	var damage: int = int(current_enemy.get("damage", BASE_ENEMY_DAMAGE + (stage - 1) * ENEMY_DAMAGE_GROWTH))
 	AudioManager.play_enemy_attack(damage)
 	_set_attack_indicator_alert()
 	enemy_actor.play_attack(_actor_center(player_actor), damage)
@@ -937,6 +1043,7 @@ func _resolve_enemy_hit(damage: int, generation: int) -> void:
 	_show_damage_text(player_actor, hp_damage, "enemy")
 	_play_player_panel_hit()
 	player_actor.play_hit(hp_damage, damage)
+	_apply_enemy_behavior()
 	_refresh_score_and_turn()
 
 	if player_hp <= 0:
@@ -952,12 +1059,17 @@ func _clear_stage() -> void:
 	restart_button.disabled = false
 	AudioManager.play_enemy_death()
 	AudioManager.play_stage_clear()
+	speed_combo.end_fever()
+	var old_best := save_manager.best_stage
+	var soul_reward := 2 if stage % 5 == 0 else 1
+	if stage + 1 > old_best: soul_reward += 1
+	save_manager.add_souls(soul_reward); save_manager.record_stage_clear(); save_manager.best_stage = maxi(save_manager.best_stage, stage + 1); save_manager.save_game(); run_souls_earned += soul_reward; AudioManager.play_meta_event("soul")
 	enemy_actor.play_death()
 	player_hp = mini(
 		run_state.get_player_max_hp(),
 		player_hp + run_state.stage_clear_heal
 	)
-	status_label.text = "Stage %d clear! Choose an upgrade." % stage
+	status_label.text = "Stage %d clear! Soul +%d" % [stage, soul_reward]
 	_show_banner("STAGE %d CLEAR" % stage, Color("#FFE08A"))
 	_refresh_all_ui()
 	_show_upgrade_when_board_ready()
@@ -975,17 +1087,33 @@ func _show_upgrade_when_board_ready() -> void:
 
 func _set_enemy_for_stage() -> void:
 	enemy_generation += 1
-	var linear_stages := mini(stage - 1, 8)
-	var soft_stages := maxi(0, stage - 9)
-	enemy_max_hp = BASE_ENEMY_HP + linear_stages * ENEMY_HP_GROWTH + soft_stages * ENEMY_HP_SOFT_GROWTH
+	current_enemy = EnemyDatabaseScript.get_for_stage(stage)
+	enemy_max_hp = int(current_enemy["max_hp"])
 	enemy_hp = enemy_max_hp
-	enemy_name_label.text = _enemy_name_for_stage(stage)
+	enemy_name_label.text = str(current_enemy["display_name"])
+	enemy_trait_label.text = str(current_enemy["description"])
 	if is_instance_valid(enemy_actor):
 		enemy_actor.configure_actor(
 			enemy_name_label.text,
 			stage,
-			_enemy_color_for_stage(stage)
+			current_enemy["color"]
 		)
+
+
+func _get_enemy_attack_interval() -> int:
+	return run_state.get_enemy_attack_interval(int(current_enemy.get("attack_interval", 3)))
+
+
+func _apply_enemy_behavior() -> void:
+	match str(current_enemy.get("behavior_id", "none")):
+		"drain_ultimate":
+			var drain := minf(ultimate_gauge, float(rng.randi_range(10, 15))); _set_ultimate_gauge(ultimate_gauge - drain)
+			if drain > 0: AudioManager.play_meta_event("debuff"); _show_banner("ULT -%d%%" % roundi(drain), Color("#B58CFF"))
+		"break_momentum":
+			speed_combo.reduce_stack(rng.randi_range(1, 2))
+			if speed_combo.fever_active: speed_combo.fever_moves_left = maxi(1, speed_combo.fever_moves_left - 1)
+			AudioManager.play_meta_event("debuff"); _show_banner("SPEED DOWN", Color("#FF776E"))
+		"heavy": _flash_screen(Color(0.55, 0.45, 0.35, 0.22), 0.16)
 
 
 func _enemy_name_for_stage(current_stage: int) -> String:
@@ -1088,7 +1216,9 @@ func _end_game(reason: String) -> void:
 	AudioManager.play_bgm("game_over")
 	input_enabled = false
 	is_animating = false
-	game_over_reason_label.text = "%s\nStage %d  |  Score %d\nRun upgrades reset on restart" % [reason, stage, score]
+	speed_combo.end_fever()
+	if not run_recorded: save_manager.record_run(stage); run_recorded = true
+	game_over_reason_label.text = "%s\nReached Stage %d  |  Score %d\nSouls earned: %d  |  Best Stage %d\nPermanent Power Lv.%d (+%d%%)\nPassive: %s\nRun upgrades: %d\nBest Speed: x%d  |  Fever: %d" % [reason, stage, score, run_souls_earned, save_manager.best_stage, save_manager.permanent_power_level, save_manager.get_permanent_attack_bonus_percent(), selected_passive, run_state.upgrade_levels.size(), speed_combo.best_stack, speed_combo.fever_activations]
 	_refresh_meta_ui()
 	game_over_overlay.visible = true
 
@@ -1101,6 +1231,7 @@ func _refresh_all_ui() -> void:
 	_refresh_ultimate_button()
 	_refresh_meta_ui()
 	_refresh_phase2_ui()
+	_refresh_speed_ui()
 
 
 func _refresh_board() -> void:
@@ -1132,13 +1263,13 @@ func _refresh_score_and_turn() -> void:
 	stage_label.text = "STAGE %d" % stage
 
 	var turns_until_attack := (
-		run_state.get_enemy_attack_interval()
-		- (turn_count % run_state.get_enemy_attack_interval())
+		_get_enemy_attack_interval()
+		- (turn_count % _get_enemy_attack_interval())
 	)
 	turn_label.text = "ATTACK IN %d" % turns_until_attack
-	attack_interval_label.text = "Enemy attacks every %d moves" % run_state.get_enemy_attack_interval()
+	attack_interval_label.text = "%s | every %d moves" % [str(current_enemy.get("description", "Enemy attack")), _get_enemy_attack_interval()]
 	for index in range(turn_indicators.size()):
-		var visible_indicator: bool = index < run_state.get_enemy_attack_interval()
+		var visible_indicator: bool = index < _get_enemy_attack_interval()
 		turn_indicators[index].visible = visible_indicator
 		var active: bool = visible_indicator and index < turns_until_attack
 		var color := Color("#C6534D") if active else Color("#D9C9C0")
@@ -1203,6 +1334,15 @@ func _format_compact_number(value: int) -> String:
 
 func _refresh_meta_ui() -> void:
 	meta_label.text = "RUN BUILD  |  %d upgrades" % run_state.upgrade_levels.size()
+	soul_label.text = "SOUL %d" % save_manager.souls
+
+
+func _refresh_speed_ui() -> void:
+	if not is_instance_valid(speed_label): return
+	speed_label.text = "SPEED x%d" % speed_combo.stack if speed_combo.stack > 0 else "SPEED --"
+	speed_bar.value = speed_combo.get_remaining_ratio(Time.get_ticks_msec()) * 100.0
+	fever_label.text = "FEVER %d/%d" % [speed_combo.fever_moves_left, SpeedComboSystem.BASE_FEVER_MOVES + speed_combo.long_fever_level] if speed_combo.fever_active else "FEVER %d%%" % roundi(speed_combo.fever_gauge)
+	fever_bar.value = 100.0 if speed_combo.fever_active else speed_combo.fever_gauge
 
 
 func _refresh_phase2_ui() -> void:
@@ -1236,7 +1376,7 @@ func _add_ultimate_charge(merged_values: Array) -> void:
 		var value := int(raw)
 		base_gain += float(ULTIMATE_CHARGE.get(value, 35.0 if value >= 128 else 4.0))
 	base_gain *= 1.0 + float(maxi(0, merged_values.size() - 1)) * 0.12
-	var gain := run_state.get_ultimate_charge_gain(base_gain)
+	var gain := run_state.get_ultimate_charge_gain(base_gain) * speed_combo.get_charge_multiplier()
 	if ultimate_gauge >= ULTIMATE_MAX:
 		if run_state.get_upgrade_level("overflow") > 0:
 			run_state.overflow_stacks = mini(3, run_state.overflow_stacks + 1)
@@ -1638,6 +1778,7 @@ func _damage_kind(
 
 func _show_upgrade_selection() -> void:
 	input_enabled = false
+	speed_combo.stop_for_modal()
 	upgrade_choice_committed = false
 	upgrade_overlay.visible = true
 	AudioManager.play_upgrade_open()
@@ -1646,7 +1787,7 @@ func _show_upgrade_selection() -> void:
 		child.queue_free()
 
 	var candidates: Array[String] = upgrade_system.generate_candidates(
-		rng, run_state, 3
+		rng, run_state, 3, save_manager.unlocked_content
 	)
 	if candidates.is_empty():
 		upgrade_overlay.visible = false
@@ -1654,6 +1795,7 @@ func _show_upgrade_selection() -> void:
 		stage += 1
 		run_state.current_stage = stage
 		_set_enemy_for_stage()
+		speed_combo.resume_after_modal()
 		_set_input_locked(false)
 		return
 	for upgrade_id: String in candidates:
@@ -1673,16 +1815,19 @@ func _select_upgrade(upgrade_id: String) -> void:
 	AudioManager.play_bgm("battle")
 	var previous_max_hp: int = run_state.get_player_max_hp()
 	upgrade_system.apply_upgrade(upgrade_id, run_state)
+	_sync_speed_upgrades()
 	if run_state.get_player_max_hp() > previous_max_hp:
 		player_hp += run_state.get_player_max_hp() - previous_max_hp
 
 	upgrade_overlay.visible = false
+	speed_combo.resume_after_modal()
 	stage += 1
 	run_state.current_stage = stage
 	turn_count = 0
 	last_warning_turn = -1
 	stage_clear_pending = false
 	var preparation := run_state.begin_stage()
+	if run_state.get_upgrade_level("hot_start") > 0: speed_combo.stack = 2; speed_combo.last_move_msec = Time.get_ticks_msec()
 	player_hp = mini(run_state.get_player_max_hp(), player_hp + int(preparation["heal"]))
 	_set_enemy_for_stage()
 	status_label.text = "%s selected — Stage %d" % [
@@ -1698,6 +1843,7 @@ func _show_build_overlay() -> void:
 		return
 	AudioManager.play_ui_click()
 	input_enabled = false
+	speed_combo.stop_for_modal()
 	build_overlay.visible = true
 	build_panel.set_summary(_get_build_summary())
 
@@ -1705,6 +1851,7 @@ func _show_build_overlay() -> void:
 func _hide_build_overlay() -> void:
 	AudioManager.play_ui_click()
 	build_overlay.visible = false
+	speed_combo.resume_after_modal()
 	input_enabled = not game_is_over and not stage_clear_pending and not is_animating
 
 
@@ -1717,12 +1864,14 @@ func _get_build_summary() -> String:
 	var lines: Array[String] = [
 		"Stage: %d" % stage,
 		"Attack bonus: +%d%%" % run_state.attack_bonus_percent,
+		"Permanent attack: +%d%%" % run_state.permanent_attack_bonus_percent,
+		"Speed: x%d (+%d%%), Fever %.2fx" % [speed_combo.stack, speed_combo.get_damage_bonus_percent(), speed_combo.get_fever_multiplier()],
 		"Combo bonus: +%d%%" % run_state.combo_bonus_percent,
 		"Max HP: %d" % run_state.get_player_max_hp(),
 		"Stage clear heal: %d" % run_state.stage_clear_heal,
 		"Ultimate damage: +%d%%" % run_state.ultimate_damage_bonus_percent,
 		"Ultimate charge: +%d%%" % run_state.ultimate_charge_bonus_percent,
-		"Enemy interval: %d moves" % run_state.get_enemy_attack_interval(),
+		"Enemy interval: %d moves" % _get_enemy_attack_interval(),
 		"Break: %d/%d" % [run_state.break_current_charges, run_state.break_max_charges],
 		"Shield: %d" % run_state.shield,
 		"Largest tile: %d / Core +%d%%" % [run_state.largest_tile, run_state.large_tile_bonus_percent],
@@ -1740,6 +1889,20 @@ func _get_build_summary() -> String:
 	if not has_upgrade:
 		lines.append("• No upgrades yet")
 	return "\n".join(lines)
+
+
+func _sync_speed_upgrades() -> void:
+	speed_combo.quick_step_level = run_state.get_upgrade_level("quick_step")
+	speed_combo.momentum_level = run_state.get_upgrade_level("momentum")
+	speed_combo.fever_charge_level = run_state.get_upgrade_level("fever_charge")
+	speed_combo.fever_power_level = run_state.get_upgrade_level("fever_power")
+	speed_combo.long_fever_level = run_state.get_upgrade_level("long_fever")
+
+
+func _process(_delta: float) -> void:
+	if speed_combo.update_timeout(Time.get_ticks_msec()):
+		_show_banner("FEVER END", Color("#B87850"))
+	if is_instance_valid(speed_bar): _refresh_speed_ui()
 
 
 func _create_tile_visual(value: int) -> PanelContainer:

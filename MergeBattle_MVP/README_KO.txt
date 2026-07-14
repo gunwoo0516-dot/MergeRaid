@@ -1,6 +1,12 @@
 MERGE BATTLE - RUN PROGRESSION MVP
 Godot 4.7 / GDScript
 
+Audio system
+- F9: merge SFX test; F10: Ultimate sequence test; F11: master mute toggle.
+- SOUND toggles master mute; settings persist in user://audio_settings.cfg.
+- Missing SFX use cached procedural prototypes; missing BGM is skipped safely.
+- Replacement names/formats are documented under assets/audio/.
+
 ==================================================
 실행 / 조작
 ==================================================

@@ -80,6 +80,7 @@ var upgrade_cards_row: HBoxContainer
 var build_overlay: ColorRect
 var build_details_label: Label
 var build_button: Button
+var sound_button: Button
 
 
 func _ready() -> void:
@@ -87,6 +88,7 @@ func _ready() -> void:
 	save_manager.load_save()
 	_build_screen()
 	_start_new_game()
+	AudioManager.play_bgm("battle")
 
 
 func _input(event: InputEvent) -> void:
@@ -205,6 +207,15 @@ func _handle_debug_key(keycode: Key) -> bool:
 			run_state.permanent_attack_multiplier = 1.0
 			_refresh_meta_ui()
 			status_label.text = "DEBUG: Save reset"
+			return true
+		KEY_F9:
+			AudioManager.play_merge(64, 2)
+			return true
+		KEY_F10:
+			AudioManager.play_ultimate()
+			return true
+		KEY_F11:
+			_toggle_sound()
 			return true
 	return false
 
@@ -489,14 +500,19 @@ func _build_board(parent: VBoxContainer) -> void:
 func _build_action_area(parent: VBoxContainer) -> void:
 	var action_row := HBoxContainer.new()
 	action_row.custom_minimum_size = Vector2(0.0, 72.0)
+	action_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	action_row.add_theme_constant_override("separation", 12)
 	parent.add_child(action_row)
 
 	ultimate_button = Button.new()
 	ultimate_button.name = "UltimateButton"
-	ultimate_button.text = "ULTIMATE  |  Consume 64+"
+	ultimate_button.text = "ULTIMATE\nNeed 64+"
+	ultimate_button.custom_minimum_size = Vector2(0.0, 72.0)
 	ultimate_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	ultimate_button.add_theme_font_size_override("font_size", 23)
+	# Text normally contributes to Button's minimum width. Clipping keeps this
+	# expanding child inside the space left by the fixed-width action buttons.
+	ultimate_button.clip_text = true
+	ultimate_button.add_theme_font_size_override("font_size", 20)
 	ultimate_button.add_theme_stylebox_override(
 		"normal",
 		_create_box_style(Color("#7659A8"), 12)
@@ -519,6 +535,14 @@ func _build_action_area(parent: VBoxContainer) -> void:
 	build_button.add_theme_font_size_override("font_size", 18)
 	build_button.pressed.connect(_show_build_overlay)
 	action_row.add_child(build_button)
+
+	sound_button = Button.new()
+	sound_button.text = "SOUND"
+	sound_button.custom_minimum_size = Vector2(100.0, 0.0)
+	sound_button.add_theme_font_size_override("font_size", 16)
+	sound_button.pressed.connect(_toggle_sound)
+	action_row.add_child(sound_button)
+	sound_button.text = "SOUND OFF" if AudioManager.master_muted else "SOUND ON"
 
 	restart_button = Button.new()
 	restart_button.text = "RESTART"
@@ -686,6 +710,8 @@ func _start_new_game() -> void:
 		return
 	if has_active_run and not run_recorded:
 		save_manager.record_run(stage)
+	AudioManager.play_ui_click()
+	AudioManager.play_bgm("battle")
 
 	logic.reset()
 	run_state.reset_for_new_run(save_manager.get_permanent_attack_multiplier())
@@ -734,6 +760,7 @@ func _try_move(direction: int) -> void:
 		status_label.text = "No tile moved"
 		_check_board_game_over()
 		return
+	AudioManager.play_tile_move()
 
 	_set_input_locked(true)
 	var merged_values: Array = result["merged_values"]
@@ -753,11 +780,13 @@ func _try_move(direction: int) -> void:
 	_refresh_board()
 
 	if not merged_values.is_empty():
+		AudioManager.play_merge_sequence(merged_values)
 		await _animate_merge_pops(move_events)
 
 	var spawn_info: Dictionary = logic.spawn_random_tile_info(rng)
 	_refresh_board()
 	if not spawn_info.is_empty():
+		AudioManager.play_tile_spawn()
 		await _animate_spawn_tile(int(spawn_info["index"]))
 
 	_refresh_all_ui()
@@ -827,6 +856,7 @@ func _start_enemy_attack(generation: int) -> void:
 	if game_is_over or stage_clear_pending or generation != enemy_generation:
 		return
 	var damage: int = BASE_ENEMY_DAMAGE + (stage - 1) * ENEMY_DAMAGE_GROWTH
+	AudioManager.play_enemy_attack(damage)
 	_set_attack_indicator_alert()
 	enemy_actor.play_attack(_actor_center(player_actor), damage)
 	var timer := get_tree().create_timer(0.1)
@@ -837,6 +867,7 @@ func _resolve_enemy_hit(damage: int, generation: int) -> void:
 	if game_is_over or stage_clear_pending or generation != enemy_generation:
 		return
 	player_hp = maxi(0, player_hp - damage)
+	AudioManager.play_player_hit(damage)
 	status_label.text = "Enemy attack! -%d HP" % damage
 	_refresh_player_ui()
 	_show_damage_text(player_actor, damage, "enemy")
@@ -855,6 +886,8 @@ func _clear_stage() -> void:
 	pending_player_attacks = 0
 	input_enabled = false
 	restart_button.disabled = false
+	AudioManager.play_enemy_death()
+	AudioManager.play_stage_clear()
 	enemy_actor.play_death()
 	save_manager.add_soul(1)
 	save_manager.record_stage_progress(stage + 1)
@@ -925,6 +958,8 @@ func _use_ultimate() -> void:
 		return
 
 	_set_input_locked(true)
+	AudioManager.play_ui_click()
+	AudioManager.play_ultimate()
 	await _animate_ultimate_tile(tile_index)
 	var consumed_value: int = logic.consume_tile(tile_index)
 	var damage: int = run_state.get_final_ultimate_damage(consumed_value)
@@ -960,6 +995,8 @@ func _end_game(reason: String) -> void:
 	if game_is_over:
 		return
 	game_is_over = true
+	AudioManager.play_game_over()
+	AudioManager.play_bgm("game_over")
 	input_enabled = false
 	is_animating = false
 	if not run_recorded:
@@ -1067,12 +1104,26 @@ func _refresh_ultimate_button() -> void:
 
 	if available:
 		var value: int = logic.cells[index]
-		ultimate_button.text = (
-			"ULTIMATE  |  Consume %d → %d DMG"
-			% [value, run_state.get_final_ultimate_damage(value)]
-		)
+		var damage: int = run_state.get_final_ultimate_damage(value)
+		ultimate_button.text = "ULTIMATE\n%s > %s" % [
+			_format_compact_number(value),
+			_format_compact_number(damage),
+		]
+		ultimate_button.tooltip_text = "Consume %d -> %d damage" % [value, damage]
 	else:
-		ultimate_button.text = "ULTIMATE  |  Need 64+"
+		ultimate_button.text = "ULTIMATE\nNeed 64+"
+		ultimate_button.tooltip_text = "Requires a 64+ tile"
+
+
+func _format_compact_number(value: int) -> String:
+	var absolute_value := absi(value)
+	if absolute_value < 10000:
+		return str(value)
+	if absolute_value < 1000000:
+		return "%.1fK" % (float(value) / 1000.0)
+	if absolute_value < 1000000000:
+		return "%.1fM" % (float(value) / 1000000.0)
+	return "%.1fB" % (float(value) / 1000000000.0)
 
 
 func _refresh_meta_ui() -> void:
@@ -1112,6 +1163,8 @@ func _start_player_attack(
 		return
 	pending_player_attacks += 1
 	var generation: int = enemy_generation
+	if not is_ultimate:
+		AudioManager.play_player_attack(largest_merge)
 	var target: Vector2 = _actor_center(enemy_actor)
 	if is_ultimate:
 		_flash_screen(Color(1.0, 0.82, 0.2, 0.42), 0.22)
@@ -1150,6 +1203,9 @@ func _resolve_player_hit(
 	if game_is_over or stage_clear_pending:
 		return
 	_damage_enemy(damage)
+	AudioManager.play_enemy_hit(
+		damage, is_ultimate or merge_count >= 2 or largest_merge >= 32
+	)
 	_show_damage_text(
 		enemy_actor,
 		damage,
@@ -1484,6 +1540,8 @@ func _show_upgrade_selection() -> void:
 func _select_upgrade(upgrade_id: String) -> void:
 	if not upgrade_overlay.visible:
 		return
+	AudioManager.play_upgrade_select()
+	AudioManager.play_bgm("battle")
 	var previous_max_hp: int = run_state.get_player_max_hp()
 	run_state.apply_upgrade(upgrade_id)
 	if run_state.get_player_max_hp() > previous_max_hp:
@@ -1507,14 +1565,21 @@ func _select_upgrade(upgrade_id: String) -> void:
 func _show_build_overlay() -> void:
 	if stage_clear_pending or game_is_over or is_animating:
 		return
+	AudioManager.play_ui_click()
 	input_enabled = false
 	build_details_label.text = _get_build_summary()
 	build_overlay.visible = true
 
 
 func _hide_build_overlay() -> void:
+	AudioManager.play_ui_click()
 	build_overlay.visible = false
 	input_enabled = not game_is_over and not stage_clear_pending and not is_animating
+
+
+func _toggle_sound() -> void:
+	var muted: bool = AudioManager.toggle_muted()
+	sound_button.text = "SOUND OFF" if muted else "SOUND ON"
 
 
 func _get_build_summary() -> String:

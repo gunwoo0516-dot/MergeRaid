@@ -65,7 +65,7 @@ func spawn_random_tile(rng: RandomNumberGenerator) -> bool:
 	return not spawn_random_tile_info(rng).is_empty()
 
 
-func spawn_random_tile_info(rng: RandomNumberGenerator) -> Dictionary:
+func spawn_random_tile_info(rng: RandomNumberGenerator, four_chance: float = 0.1) -> Dictionary:
 	var empty_indices: Array[int] = []
 
 	for index in range(cells.size()):
@@ -79,7 +79,7 @@ func spawn_random_tile_info(rng: RandomNumberGenerator) -> Dictionary:
 	var selected_index: int = empty_indices[random_position]
 
 	# 기존 2048과 비슷하게 90% 확률로 2, 10% 확률로 4를 생성합니다.
-	var value: int = 4 if rng.randf() < 0.1 else 2
+	var value: int = 4 if rng.randf() < clampf(four_chance, 0.0, 1.0) else 2
 	cells[selected_index] = value
 	return {
 		"index": selected_index,
@@ -124,6 +124,13 @@ func consume_tile(index: int) -> int:
 	var value := cells[index]
 	cells[index] = 0
 	return value
+
+
+func get_largest_tile() -> int:
+	var largest := 0
+	for value: int in cells:
+		largest = maxi(largest, value)
+	return largest
 
 
 func get_cell(row: int, column: int) -> int:

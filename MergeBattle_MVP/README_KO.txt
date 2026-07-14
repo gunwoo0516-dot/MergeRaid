@@ -1,121 +1,68 @@
-MERGE BATTLE - RUN PROGRESSION MVP
-Godot 4.7 / GDScript
+MERGE BATTLE - PHASE 2 RUN BUILD
+Godot 4.7 / GDScript / 720x1280 portrait
 
-Audio system
-- F9: merge SFX test; F10: Ultimate sequence test; F11: master mute toggle.
-- SOUND toggles master mute; settings persist in user://audio_settings.cfg.
-- Missing SFX use cached procedural prototypes; missing BGM is skipped safely.
-- Replacement names/formats are documented under assets/audio/.
+조작
+- 이동: 방향키 / WASD / mouse drag / mobile swipe
+- ULTIMATE: U 또는 button (gauge 100% 필요, tile 비소비)
+- BREAK: 가장 큰 64+ tile 제거, 제거 값 25% shield
+- BUILD: 현재 run stat 및 upgrade 확인
+- RESTART: 즉시 새 run. board, HP, gauge, shield, upgrade 초기화
 
-==================================================
-실행 / 조작
-==================================================
+Run 규칙
+- stage clear 후 board, HP, gauge, shield, Break charge, upgrade가 유지됩니다.
+- enemy만 stage별 HP/damage/attack countdown으로 교체됩니다.
+- 영구 성장, Soul, meta save는 Phase 2에서 사용하지 않습니다.
+- upgrade 선택 전에는 battle input이 잠기며 선택 후 다음 stage가 시작됩니다.
 
-1. Godot Project Manager에서 project.godot을 Import합니다.
-2. F6 또는 F5로 실행합니다.
+Ultimate
+- merge charge: 4=4, 8=6, 16=10, 32=16, 64=25, 128+=35.
+- 한 move의 merge 수에 따라 12%씩 combo charge가 붙고 Fast/Arcane Core가 배율을 적용합니다.
+- damage = max(largest tile, recent merge damage) x 2 x additive bonuses.
+- 사용 시 gauge만 0이 되며 tile/turn/spawn에는 영향을 주지 않습니다.
 
-PC
-- 이동: 방향키 / WASD / mouse drag
-- Ultimate: U 또는 ULTIMATE button
-- 현재 성장 확인: BUILD button
-- 새 run: R 또는 RESTART button
+Large Tile Core
+- 64/128/256/512/1024 이상에서 Attack +10/+20/+30/+40/+50%.
+- 가장 높은 한 단계만 적용하며 Giant Strength가 level당 +4% 강화합니다.
 
-Mobile
-- 이동: 상하좌우 swipe
-- Ultimate / BUILD / RESTART button
+Upgrade pool (max level)
+Attack: Power Up(5), Heavy Strike(4), Critical Edge(4), First Blood(3)
+Combo: Combo Master(5), Chain Slash(3), Finisher(4), Rhythm Attack(3)
+Survival: Vitality(5), Recovery(5), Tough Skin(4), Emergency Shield(3), Second Wind(1)
+Ultimate: Fast Charge(5), Ultimate Power(5), Overflow(3), Aftershock(3)
+Large Tile: Giant Strength(5), Stable Core(3), Arcane Core(3)
+Utility: Break Charge(3), Small Start(3), Battle Focus(3), Stage Preparation(3)
 
 Debug build
-- F1: enemy HP를 1로 설정
-- F2: 빈 cell에 64 tile 생성
-- F3: Soul 5개 추가
-- F4: upgrade 선택 화면 강제 표시
-- F8: meta save 초기화
+- F1 enemy HP=1
+- F2 빈 cell에 64 tile
+- F3 Ultimate gauge=100%
+- F4 upgrade overlay 강제 표시
+- F7 Break charge +1
+- F8 현재 run upgrade 초기화
+- F9/F10/F11 기존 audio test/mute 유지
 
-==================================================
-핵심 rule
-==================================================
+수동 smoke test
+1. 이동하지 않는 입력은 turn/spawn/charge를 만들지 않는지 확인합니다.
+2. merge animation 뒤 input이 빠르게 풀리고 공격/damage text와 겹쳐 진행되는지 확인합니다.
+3. F1 후 merge하여 서로 다른 card 3개와 rarity 색상, max-level 제외를 확인합니다.
+4. 선택 후 board/HP가 유지되고 BUILD에 level/stat이 표시되는지 확인합니다.
+5. F3 후 Ultimate가 tile을 보존하고 gauge만 0으로 만드는지 확인합니다.
+6. F2 후 BREAK가 64 tile, charge를 제거하고 shield를 생성하는지 확인합니다.
+7. enemy attack이 shield부터 소모하고 남은 damage만 HP에 적용하는지 확인합니다.
+8. 64/128/256 tile에서 CORE 표시와 merge damage 변화를 확인합니다.
+9. Restart와 game over/PLAY AGAIN에서 새 run 상태를 확인합니다.
+10. 작은 창과 720x1280에서 card/build Scroll 및 action row overflow를 확인합니다.
 
-- 4×4 board에서 2048 방식으로 이동하고 merge합니다.
-- 정상 이동에만 turn이 증가하고 새 2/4 tile이 생성됩니다.
-- merge 값의 합과 combo bonus에 run attack 배율과 permanent 배율을 적용합니다.
-- 최종 damage는 roundi로 반올림합니다.
-- Ultimate는 가장 큰 64+ tile을 소비하며 turn을 소비하지 않습니다.
-- enemy 공격 간격은 기본 3 move이며 Fortify로 최대 5 move까지 증가합니다.
-- enemy를 처치하면 Soul 1개를 획득하고 upgrade 3개 중 하나를 선택합니다.
-- upgrade를 선택해야 다음 stage가 시작됩니다.
-- stage 전환 시 board, HP, run upgrade는 유지되고 enemy와 attack turn만 갱신됩니다.
-
-==================================================
-Run upgrade
-==================================================
-
-- Power Up: 모든 merge damage +20%
-- Combo Master: combo bonus +25%
-- Vitality: max HP +20, 현재 HP +20
-- Recovery: stage clear 회복량 +5
-- Ultimate Power: Ultimate 배율 +0.5x
-- Fortify: enemy 공격을 1 move 늦춤, 최대 2 level
-
-동일 선택 화면에 같은 upgrade는 중복되지 않습니다. Max level upgrade는 후보에서 제외됩니다.
-
-==================================================
-Meta progression
-==================================================
-
-- stage clear마다 Soul 1개를 즉시 user://merge_battle_progress.cfg에 저장합니다.
-- Soul 5개마다 permanent attack level이 1 증가합니다.
-- level당 새 run의 damage +5%, 최대 +50%입니다.
-- Souls, best stage, total runs가 game over 뒤에도 유지됩니다.
-- save가 없거나 읽을 수 없으면 default 값으로 시작합니다.
-
-==================================================
-Animation / input flow
-==================================================
-
-- tile 이동: 0.10초
-- merge pop: 0.08초
-- spawn: 0.08초
-- actor attack: 약 0.11초
-- hit flash / shake: 약 0.10초
-- damage text: 약 0.34초
-
-board input은 tile 이동, merge 적용, spawn이 끝날 때까지만 잠깁니다.
-player/enemy attack, hit, damage text는 board 확정 뒤 독립적으로 재생됩니다.
-연속 effect는 이전 damage text를 기다리지 않으며 actor/panel Tween은 이전 상태를 안전하게 정리합니다.
-
-==================================================
 Project 구조
-==================================================
+- scripts/main.gd: battle flow, input, runtime UI/effects
+- scripts/board_logic.gd: 2048 rule, spawn chance, tile query/removal API
+- scripts/run_state.gd: run stats, upgrade effects, damage/charge/shield calculations
+- scripts/upgrade_system.gd: 24 definitions, rarity/weight, candidate/max-level rules
+- scripts/upgrade_card.gd: one-shot rarity card UI
+- scripts/build_panel.gd: scrollable build display
+- scripts/audio_manager.gd: non-blocking gameplay/UI SFX with procedural fallback
 
-res://
-├─ project.godot
-├─ scenes/main.tscn
-└─ scripts/
-   ├─ main.gd                 game flow와 UI 연결
-   ├─ board_logic.gd          2048 move/merge/spawn과 tile event
-   ├─ run_state.gd            현재 run 성장과 damage 계산
-   ├─ upgrade_system.gd       upgrade 정의/후보/변경값 표시
-   ├─ save_manager.gd         Soul/best stage/run/meta save
-   ├─ battle_actor_view.gd    idle/attack/hit/death/spawn/ultimate
-   └─ actor_figure.gd         기본 도형 player/5종 monster silhouette
-
-==================================================
-PC 수동 test 순서
-==================================================
-
-1. 방향키, WASD, mouse drag로 이동하고 mobile 환경에서는 swipe를 확인합니다.
-2. 이동 tile이 cell 사이를 0.10초 정도로 이동하고 merge pop과 spawn이 이어지는지 확인합니다.
-3. spawn 직후 다음 입력이 가능하며 damage text가 남아 있어도 board가 움직이는지 확인합니다.
-4. 빠르게 여러 번 입력해도 중복 turn이나 잘못된 tile이 생기지 않는지 확인합니다.
-5. 작은 merge, 32 merge, 64+ merge, 동시 merge에서 attack 크기와 text가 달라지는지 확인합니다.
-6. 정상 이동 3회마다 enemy가 짧게 공격하고 player HP가 감소하는지 확인합니다.
-7. F1 후 merge하여 stage clear upgrade card가 정확히 3개 표시되는지 확인합니다.
-8. card를 선택하기 전 board 입력이 막히고, 선택 후 기존 board로 다음 stage가 시작되는지 확인합니다.
-9. Power/Combo/Vitality/Recovery/Ultimate/Fortify가 BUILD 표시와 실제 rule에 반영되는지 확인합니다.
-10. F2 후 U를 눌러 tile 소비, 0.6초 이하 Ultimate 연출, damage와 input 복귀를 확인합니다.
-11. stage별 Slime/Goblin/Golem/Mage/Dragon의 색상과 형태가 바뀌는지 확인합니다.
-12. stage clear 후 Soul과 Best Stage가 즉시 증가하는지 확인합니다.
-13. game over 후 PLAY AGAIN으로 새 run을 시작해 board와 run upgrade는 초기화되고 Soul은 유지되는지 확인합니다.
-14. Soul 5개 이상에서 새 run의 Permanent Power와 실제 damage가 +5% 단위로 증가하는지 확인합니다.
-15. user save file을 임시로 손상시킨 뒤 실행해 crash 없이 default 상태로 시작하는지 확인합니다.
-16. Debug build에서 F1/F2/F3/F4/F8을 각각 확인합니다.
+현재 balance
+- Enemy HP: Stage 1은 62, Stage 2~9는 stage당 +34, 이후 stage당 +14
+- Enemy damage: 기본 7, stage당 +2
+- Stage clear 기본 회복: 10 HP

@@ -20,6 +20,9 @@ const AUDIO_PATHS := {
 	"game_over": "res://assets/audio/sfx/game_over.wav",
 	"upgrade_select": "res://assets/audio/sfx/upgrade_select.wav",
 	"ui_click": "res://assets/audio/sfx/ui_click.wav",
+	"ultimate_full": "res://assets/audio/sfx/ultimate_full.wav",
+	"break": "res://assets/audio/sfx/break.wav",
+	"shield": "res://assets/audio/sfx/shield.wav",
 }
 const BGM_PATHS := {
 	"battle": "res://assets/audio/bgm/battle.ogg",
@@ -113,8 +116,29 @@ func play_game_over() -> void:
 	_play("game_over", 0.82, -2.0)
 
 
-func play_upgrade_select() -> void:
-	_play("upgrade_select", 1.08, -3.0, "UI")
+func play_upgrade_open() -> void:
+	_play("ui_click", 0.82, -5.0, "UI")
+
+
+func play_upgrade_select(rarity: String = "Common") -> void:
+	var pitch := 1.3 if rarity == "Epic" else (1.16 if rarity == "Rare" else 1.08)
+	_play("upgrade_select", pitch, -3.0, "UI")
+
+
+func play_ultimate_charge() -> void:
+	_play("ultimate_charge", 1.35, -12.0)
+
+
+func play_ultimate_full() -> void:
+	_play("ultimate_full", 1.0, -3.0)
+
+
+func play_break() -> void:
+	_play("break", 0.9, -2.0)
+
+
+func play_shield() -> void:
+	_play("shield", 1.15, -4.0)
 
 
 func play_bgm(track_id: String, fade_duration: float = 0.35) -> void:
@@ -273,6 +297,9 @@ func _prototype_profile(event_id: String) -> Dictionary:
 		"stage_clear": return {"frequency": 660.0, "duration": 0.3, "wave": "sine"}
 		"game_over": return {"frequency": 110.0, "duration": 0.38, "wave": "square"}
 		"upgrade_select": return {"frequency": 760.0, "duration": 0.12, "wave": "sine"}
+		"ultimate_full": return {"frequency": 880.0, "duration": 0.22, "wave": "sine"}
+		"break": return {"frequency": 145.0, "duration": 0.24, "wave": "noise"}
+		"shield": return {"frequency": 540.0, "duration": 0.16, "wave": "sine"}
 		_: return {"frequency": 600.0, "duration": 0.06, "wave": "sine"}
 
 

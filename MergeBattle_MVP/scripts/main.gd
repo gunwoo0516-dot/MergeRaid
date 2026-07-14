@@ -5,7 +5,8 @@ const BoardLogicScript = preload("res://scripts/board_logic.gd")
 const BattleActorViewScript = preload("res://scripts/battle_actor_view.gd")
 const RunStateScript = preload("res://scripts/run_state.gd")
 const UpgradeSystemScript = preload("res://scripts/upgrade_system.gd")
-const SaveManagerScript = preload("res://scripts/save_manager.gd")
+const UpgradeCardScript = preload("res://scripts/upgrade_card.gd")
+const BuildPanelScript = preload("res://scripts/build_panel.gd")
 
 const BOARD_SIZE: int = 4
 const TILE_SIZE := Vector2(132.0, 132.0)
@@ -15,17 +16,18 @@ const MERGE_POP_DURATION: float = 0.08
 const SPAWN_DURATION: float = 0.08
 const DAMAGE_TEXT_DURATION: float = 0.34
 
-const ULTIMATE_MIN_TILE: int = 64
-const BASE_ENEMY_HP: int = 72
-const ENEMY_HP_GROWTH: int = 42
-const BASE_ENEMY_DAMAGE: int = 9
-const ENEMY_DAMAGE_GROWTH: int = 2
+const BASE_ENEMY_HP := 62
+const ENEMY_HP_GROWTH := 34
+const ENEMY_HP_SOFT_GROWTH := 14
+const BASE_ENEMY_DAMAGE := 7
+const ENEMY_DAMAGE_GROWTH := 2
+const ULTIMATE_MAX := 100.0
+const ULTIMATE_CHARGE := {4: 4.0, 8: 6.0, 16: 10.0, 32: 16.0, 64: 25.0}
 
 var logic = BoardLogicScript.new()
 var rng := RandomNumberGenerator.new()
 var run_state: RunState = RunStateScript.new()
 var upgrade_system: UpgradeSystem = UpgradeSystemScript.new()
-var save_manager: SaveManager = SaveManagerScript.new()
 
 var tile_panels: Array[PanelContainer] = []
 var tile_labels: Array[Label] = []
@@ -41,8 +43,10 @@ var enemy_max_hp: int = 0
 var enemy_generation: int = 0
 var pending_player_attacks: int = 0
 var stage_clear_pending: bool = false
-var run_recorded: bool = false
-var has_active_run: bool = false
+var upgrade_choice_committed := false
+var ultimate_gauge := 0.0
+var recent_merge_damage := 0
+var ultimate_was_full := false
 
 var game_is_over: bool = false
 var input_enabled: bool = true
@@ -55,6 +59,7 @@ var touch_active: bool = false
 var score_label: Label
 var stage_label: Label
 var meta_label: Label
+var shield_label: Label
 var player_hp_label: Label
 var player_hp_bar: ProgressBar
 var enemy_name_label: Label
@@ -65,6 +70,10 @@ var attack_interval_label: Label
 var status_label: Label
 var damage_label: Label
 var ultimate_button: Button
+var ultimate_gauge_bar: ProgressBar
+var ultimate_gauge_label: Label
+var break_button: Button
+var core_label: Label
 var restart_button: Button
 var enemy_panel: PanelContainer
 var player_hp_panel: PanelContainer
@@ -78,14 +87,13 @@ var game_over_reason_label: Label
 var upgrade_overlay: ColorRect
 var upgrade_cards_row: HBoxContainer
 var build_overlay: ColorRect
-var build_details_label: Label
+var build_panel: BuildPanel
 var build_button: Button
 var sound_button: Button
 
 
 func _ready() -> void:
 	rng.randomize()
-	save_manager.load_save()
 	_build_screen()
 	_start_new_game()
 	AudioManager.play_bgm("battle")
@@ -189,24 +197,33 @@ func _handle_debug_key(keycode: Key) -> bool:
 			var index: int = logic.cells.find(0)
 			if index >= 0:
 				logic.cells[index] = 64
+				_update_large_tile_passive()
 				_refresh_board()
 			status_label.text = "DEBUG: Added a 64 tile"
 			return true
 		KEY_F3:
-			save_manager.add_soul(5)
-			_refresh_meta_ui()
-			status_label.text = "DEBUG: Added 5 Souls"
+			_set_ultimate_gauge(100.0)
+			status_label.text = "DEBUG: Ultimate ready"
 			return true
 		KEY_F4:
 			if not is_animating and not stage_clear_pending and not game_is_over:
 				stage_clear_pending = true
 				_show_upgrade_selection()
 			return true
+		KEY_F7:
+			run_state.break_current_charges += 1
+			run_state.break_max_charges = maxi(run_state.break_max_charges, run_state.break_current_charges)
+			_refresh_all_ui()
+			status_label.text = "DEBUG: Break charge +1"
+			return true
 		KEY_F8:
-			save_manager.reset_save_for_debug()
-			run_state.permanent_attack_multiplier = 1.0
-			_refresh_meta_ui()
-			status_label.text = "DEBUG: Save reset"
+			var hp_ratio := float(player_hp) / float(maxi(1, run_state.get_player_max_hp()))
+			run_state.reset_for_new_run()
+			player_hp = maxi(1, roundi(float(run_state.get_player_max_hp()) * hp_ratio))
+			_set_ultimate_gauge(0.0)
+			_update_large_tile_passive()
+			_refresh_all_ui()
+			status_label.text = "DEBUG: Run upgrades reset"
 			return true
 		KEY_F9:
 			AudioManager.play_merge(64, 2)
@@ -275,7 +292,7 @@ func _build_header(parent: VBoxContainer) -> void:
 	info_box.add_child(stage_label)
 
 	meta_label = Label.new()
-	meta_label.text = "Souls 0  |  Best 1  |  Power +0%"
+	meta_label.text = "RUN BUILD"
 	meta_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	meta_label.add_theme_font_size_override("font_size", 13)
 	meta_label.add_theme_color_override("font_color", Color("#756A61"))
@@ -340,6 +357,11 @@ func _build_player_row(parent: VBoxContainer) -> void:
 		_create_box_style(Color("#70A36B"), 8)
 	)
 	hp_box.add_child(player_hp_bar)
+	shield_label = Label.new()
+	shield_label.text = "SHIELD 0"
+	shield_label.add_theme_font_size_override("font_size", 14)
+	shield_label.add_theme_color_override("font_color", Color("#4E79A7"))
+	hp_box.add_child(shield_label)
 
 	var score_panel := PanelContainer.new()
 	score_panel.custom_minimum_size = Vector2(185.0, 0.0)
@@ -498,6 +520,28 @@ func _build_board(parent: VBoxContainer) -> void:
 
 
 func _build_action_area(parent: VBoxContainer) -> void:
+	var gauge_row := HBoxContainer.new()
+	gauge_row.add_theme_constant_override("separation", 10)
+	parent.add_child(gauge_row)
+	ultimate_gauge_bar = ProgressBar.new()
+	ultimate_gauge_bar.min_value = 0
+	ultimate_gauge_bar.max_value = ULTIMATE_MAX
+	ultimate_gauge_bar.value = 0
+	ultimate_gauge_bar.show_percentage = false
+	ultimate_gauge_bar.custom_minimum_size = Vector2(0.0, 24.0)
+	ultimate_gauge_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ultimate_gauge_bar.add_theme_stylebox_override("fill", _create_box_style(Color("#7659A8"), 8))
+	gauge_row.add_child(ultimate_gauge_bar)
+	ultimate_gauge_label = Label.new()
+	ultimate_gauge_label.custom_minimum_size = Vector2(78.0, 0.0)
+	ultimate_gauge_label.text = "ULT 0%"
+	gauge_row.add_child(ultimate_gauge_label)
+	core_label = Label.new()
+	core_label.custom_minimum_size = Vector2(110.0, 0.0)
+	core_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	core_label.text = "CORE +0%"
+	gauge_row.add_child(core_label)
+
 	var action_row := HBoxContainer.new()
 	action_row.custom_minimum_size = Vector2(0.0, 72.0)
 	action_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -506,7 +550,7 @@ func _build_action_area(parent: VBoxContainer) -> void:
 
 	ultimate_button = Button.new()
 	ultimate_button.name = "UltimateButton"
-	ultimate_button.text = "ULTIMATE\nNeed 64+"
+	ultimate_button.text = "ULTIMATE\n0%"
 	ultimate_button.custom_minimum_size = Vector2(0.0, 72.0)
 	ultimate_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	# Text normally contributes to Button's minimum width. Clipping keeps this
@@ -529,16 +573,24 @@ func _build_action_area(parent: VBoxContainer) -> void:
 	ultimate_button.pressed.connect(_use_ultimate)
 	action_row.add_child(ultimate_button)
 
+	break_button = Button.new()
+	break_button.text = "BREAK\n1/1"
+	break_button.custom_minimum_size = Vector2(110.0, 0.0)
+	break_button.clip_text = true
+	break_button.add_theme_font_size_override("font_size", 17)
+	break_button.pressed.connect(_use_emergency_break)
+	action_row.add_child(break_button)
+
 	build_button = Button.new()
 	build_button.text = "BUILD"
-	build_button.custom_minimum_size = Vector2(105.0, 0.0)
+	build_button.custom_minimum_size = Vector2(90.0, 0.0)
 	build_button.add_theme_font_size_override("font_size", 18)
 	build_button.pressed.connect(_show_build_overlay)
 	action_row.add_child(build_button)
 
 	sound_button = Button.new()
 	sound_button.text = "SOUND"
-	sound_button.custom_minimum_size = Vector2(100.0, 0.0)
+	sound_button.custom_minimum_size = Vector2(86.0, 0.0)
 	sound_button.add_theme_font_size_override("font_size", 16)
 	sound_button.pressed.connect(_toggle_sound)
 	action_row.add_child(sound_button)
@@ -546,7 +598,7 @@ func _build_action_area(parent: VBoxContainer) -> void:
 
 	restart_button = Button.new()
 	restart_button.text = "RESTART"
-	restart_button.custom_minimum_size = Vector2(120.0, 0.0)
+	restart_button.custom_minimum_size = Vector2(110.0, 0.0)
 	restart_button.add_theme_font_size_override("font_size", 21)
 	restart_button.pressed.connect(_start_new_game)
 	action_row.add_child(restart_button)
@@ -643,10 +695,10 @@ func _build_build_overlay() -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 30)
 	box.add_child(title)
-	build_details_label = Label.new()
-	build_details_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	build_details_label.add_theme_font_size_override("font_size", 20)
-	box.add_child(build_details_label)
+	build_panel = BuildPanelScript.new()
+	build_panel.custom_minimum_size = Vector2(0.0, 390.0)
+	build_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	box.add_child(build_panel)
 	var close_button := Button.new()
 	close_button.text = "CLOSE"
 	close_button.custom_minimum_size = Vector2(0.0, 58.0)
@@ -708,13 +760,11 @@ func _build_game_over_overlay() -> void:
 func _start_new_game() -> void:
 	if is_animating:
 		return
-	if has_active_run and not run_recorded:
-		save_manager.record_run(stage)
 	AudioManager.play_ui_click()
 	AudioManager.play_bgm("battle")
 
 	logic.reset()
-	run_state.reset_for_new_run(save_manager.get_permanent_attack_multiplier())
+	run_state.reset_for_new_run()
 
 	score = 0
 	stage = 1
@@ -727,8 +777,10 @@ func _start_new_game() -> void:
 	touch_active = false
 	stage_clear_pending = false
 	pending_player_attacks = 0
-	run_recorded = false
-	has_active_run = true
+	upgrade_choice_committed = false
+	ultimate_gauge = 0.0
+	recent_merge_damage = 0
+	ultimate_was_full = false
 
 	game_over_overlay.visible = false
 	upgrade_overlay.visible = false
@@ -741,6 +793,7 @@ func _start_new_game() -> void:
 	_set_enemy_for_stage()
 	logic.spawn_random_tile(rng)
 	logic.spawn_random_tile(rng)
+	_update_large_tile_passive()
 
 	status_label.text = "Arrow keys / WASD / Swipe"
 	damage_label.text = ""
@@ -770,6 +823,7 @@ func _try_move(direction: int) -> void:
 
 	score += merge_score
 	turn_count += 1
+	run_state.record_move(not merged_values.is_empty())
 	enemy_attack_due = (
 		turn_count % run_state.get_enemy_attack_interval() == 0
 	)
@@ -783,7 +837,9 @@ func _try_move(direction: int) -> void:
 		AudioManager.play_merge_sequence(merged_values)
 		await _animate_merge_pops(move_events)
 
-	var spawn_info: Dictionary = logic.spawn_random_tile_info(rng)
+	var four_chance := maxf(0.01, 0.1 - float(run_state.get_upgrade_level("small_start")) * 0.03)
+	var spawn_info: Dictionary = logic.spawn_random_tile_info(rng, four_chance)
+	_update_large_tile_passive()
 	_refresh_board()
 	if not spawn_info.is_empty():
 		AudioManager.play_tile_spawn()
@@ -797,6 +853,9 @@ func _try_move(direction: int) -> void:
 		var damage: int = int(attack["damage"])
 		var combo_bonus: int = int(attack["final_combo_bonus"])
 		var largest_merge: int = int(attack["largest_merge"])
+		recent_merge_damage = damage
+		_add_ultimate_charge(merged_values)
+		run_state.consume_attack_flags()
 
 		if combo_bonus > 0:
 			status_label.text = (
@@ -834,9 +893,10 @@ func _calculate_merge_attack(merged_values: Array) -> Dictionary:
 		float(base_damage) * float(extra_merge_count) * 0.25
 	)
 	var final_combo_bonus: int = run_state.get_final_combo_bonus(base_combo_bonus)
-	var damage: int = run_state.get_final_attack_damage(
-		base_damage, base_combo_bonus
-	)
+	var damage: int = run_state.get_final_merge_damage(base_damage, base_combo_bonus, {
+		"largest_merge": largest_merge,
+		"merge_count": merged_values.size(),
+	})
 
 	return {
 		"damage": damage,
@@ -866,13 +926,17 @@ func _start_enemy_attack(generation: int) -> void:
 func _resolve_enemy_hit(damage: int, generation: int) -> void:
 	if game_is_over or stage_clear_pending or generation != enemy_generation:
 		return
-	player_hp = maxi(0, player_hp - damage)
-	AudioManager.play_player_hit(damage)
-	status_label.text = "Enemy attack! -%d HP" % damage
+	var result := run_state.absorb_damage(damage, player_hp)
+	var hp_damage := int(result["hp_damage"])
+	var absorbed := int(result["absorbed"])
+	player_hp = maxi(0, player_hp - hp_damage)
+	if absorbed > 0: AudioManager.play_shield()
+	AudioManager.play_player_hit(hp_damage)
+	status_label.text = "Enemy attack! -%d HP%s" % [hp_damage, " / Shield %d" % absorbed if absorbed > 0 else ""]
 	_refresh_player_ui()
-	_show_damage_text(player_actor, damage, "enemy")
+	_show_damage_text(player_actor, hp_damage, "enemy")
 	_play_player_panel_hit()
-	player_actor.play_hit(damage, damage)
+	player_actor.play_hit(hp_damage, damage)
 	_refresh_score_and_turn()
 
 	if player_hp <= 0:
@@ -889,14 +953,12 @@ func _clear_stage() -> void:
 	AudioManager.play_enemy_death()
 	AudioManager.play_stage_clear()
 	enemy_actor.play_death()
-	save_manager.add_soul(1)
-	save_manager.record_stage_progress(stage + 1)
 	player_hp = mini(
 		run_state.get_player_max_hp(),
 		player_hp + run_state.stage_clear_heal
 	)
 	status_label.text = "Stage %d clear! Choose an upgrade." % stage
-	_show_banner("STAGE %d CLEAR  +1 SOUL" % stage, Color("#FFE08A"))
+	_show_banner("STAGE %d CLEAR" % stage, Color("#FFE08A"))
 	_refresh_all_ui()
 	_show_upgrade_when_board_ready()
 
@@ -913,7 +975,9 @@ func _show_upgrade_when_board_ready() -> void:
 
 func _set_enemy_for_stage() -> void:
 	enemy_generation += 1
-	enemy_max_hp = BASE_ENEMY_HP + (stage - 1) * ENEMY_HP_GROWTH
+	var linear_stages := mini(stage - 1, 8)
+	var soft_stages := maxi(0, stage - 9)
+	enemy_max_hp = BASE_ENEMY_HP + linear_stages * ENEMY_HP_GROWTH + soft_stages * ENEMY_HP_SOFT_GROWTH
 	enemy_hp = enemy_max_hp
 	enemy_name_label.text = _enemy_name_for_stage(stage)
 	if is_instance_valid(enemy_actor):
@@ -950,31 +1014,57 @@ func _enemy_color_for_stage(current_stage: int) -> Color:
 func _use_ultimate() -> void:
 	if game_is_over or not input_enabled:
 		return
-
-	var tile_index := logic.find_largest_tile_index(ULTIMATE_MIN_TILE)
-
-	if tile_index < 0:
-		status_label.text = "A 64+ tile is required"
+	if ultimate_gauge < ULTIMATE_MAX:
+		status_label.text = "Ultimate gauge is not full"
 		return
 
 	_set_input_locked(true)
 	AudioManager.play_ui_click()
 	AudioManager.play_ultimate()
-	await _animate_ultimate_tile(tile_index)
-	var consumed_value: int = logic.consume_tile(tile_index)
-	var damage: int = run_state.get_final_ultimate_damage(consumed_value)
-
-	score += consumed_value
-	_refresh_board()
-	_refresh_score_and_turn()
-
-	status_label.text = (
-		"ULTIMATE! Consumed %d → %d damage"
-		% [consumed_value, damage]
-	)
+	await _animate_ultimate_gauge_burst()
+	var base := maxi(logic.get_largest_tile(), recent_merge_damage)
+	var damage := run_state.get_final_ultimate_damage(maxi(4, base))
+	run_state.overflow_stacks = 0
+	_set_ultimate_gauge(0.0)
+	status_label.text = "ULTIMATE! %d damage — tiles preserved" % damage
 	_refresh_all_ui()
 	_set_input_locked(false)
-	_start_player_attack(damage, consumed_value, 1, true, false)
+	_start_player_attack(damage, maxi(4, base), 1, true, false)
+	var aftershock_level := run_state.get_upgrade_level("aftershock")
+	if aftershock_level > 0:
+		var timer := get_tree().create_timer(0.28)
+		timer.timeout.connect(_apply_aftershock.bind(maxi(1, roundi(float(damage) * 0.12 * aftershock_level))))
+
+
+func _apply_aftershock(damage: int) -> void:
+	if game_is_over or stage_clear_pending or enemy_hp <= 0: return
+	_damage_enemy(damage)
+	_show_damage_text(enemy_actor, damage, "power")
+	if enemy_hp <= 0: _clear_stage()
+
+
+func _use_emergency_break() -> void:
+	if game_is_over or not input_enabled or is_animating: return
+	if run_state.break_current_charges <= 0:
+		status_label.text = "No Break charges"
+		return
+	var index := logic.find_largest_tile_index(64)
+	if index < 0:
+		status_label.text = "Break needs a 64+ tile"
+		return
+	_set_input_locked(true)
+	var value := logic.consume_tile(index)
+	run_state.break_current_charges -= 1
+	var gained := maxi(1, roundi(float(value) * 0.25))
+	run_state.shield += gained
+	AudioManager.play_break()
+	AudioManager.play_shield()
+	await _animate_break_tile(index)
+	_update_large_tile_passive()
+	_refresh_all_ui()
+	status_label.text = "BREAK %d -> Shield +%d" % [value, gained]
+	_set_input_locked(false)
+	_check_board_game_over()
 
 
 func _check_board_game_over() -> void:
@@ -983,9 +1073,8 @@ func _check_board_game_over() -> void:
 	if logic.can_move():
 		return
 
-	# 64+ tile이 있다면 ultimate로 공간을 만들 수 있으므로 아직 끝나지 않습니다.
-	if logic.find_largest_tile_index(ULTIMATE_MIN_TILE) >= 0:
-		status_label.text = "No moves. Use ULTIMATE!"
+	if run_state.break_current_charges > 0 and logic.find_largest_tile_index(64) >= 0:
+		status_label.text = "No moves. Use BREAK!"
 		return
 
 	_end_game("No more moves are available.")
@@ -999,19 +1088,7 @@ func _end_game(reason: String) -> void:
 	AudioManager.play_bgm("game_over")
 	input_enabled = false
 	is_animating = false
-	if not run_recorded:
-		save_manager.record_run(stage)
-		run_recorded = true
-	game_over_reason_label.text = (
-		"%s\nStage %d  |  Score %d\nSouls %d  |  Permanent Power +%d%%"
-		% [
-			reason,
-			stage,
-			score,
-			save_manager.total_souls,
-			save_manager.permanent_attack_level * 5,
-		]
-	)
+	game_over_reason_label.text = "%s\nStage %d  |  Score %d\nRun upgrades reset on restart" % [reason, stage, score]
 	_refresh_meta_ui()
 	game_over_overlay.visible = true
 
@@ -1023,6 +1100,7 @@ func _refresh_all_ui() -> void:
 	_refresh_enemy_ui()
 	_refresh_ultimate_button()
 	_refresh_meta_ui()
+	_refresh_phase2_ui()
 
 
 func _refresh_board() -> void:
@@ -1082,6 +1160,7 @@ func _refresh_player_ui() -> void:
 	player_hp_label.text = "%d / %d" % [player_hp, max_hp]
 	player_hp_bar.max_value = max_hp
 	player_hp_bar.value = player_hp
+	shield_label.text = "SHIELD %d" % run_state.shield
 
 
 func _refresh_enemy_ui() -> void:
@@ -1091,9 +1170,8 @@ func _refresh_enemy_ui() -> void:
 
 
 func _refresh_ultimate_button() -> void:
-	var index := logic.find_largest_tile_index(ULTIMATE_MIN_TILE)
 	var available: bool = (
-		index >= 0
+		ultimate_gauge >= ULTIMATE_MAX
 		and not game_is_over
 		and not is_animating
 		and not stage_clear_pending
@@ -1103,16 +1181,13 @@ func _refresh_ultimate_button() -> void:
 	ultimate_button.disabled = not available
 
 	if available:
-		var value: int = logic.cells[index]
-		var damage: int = run_state.get_final_ultimate_damage(value)
-		ultimate_button.text = "ULTIMATE\n%s > %s" % [
-			_format_compact_number(value),
-			_format_compact_number(damage),
-		]
-		ultimate_button.tooltip_text = "Consume %d -> %d damage" % [value, damage]
+		var base := maxi(logic.get_largest_tile(), recent_merge_damage)
+		var damage: int = run_state.get_final_ultimate_damage(maxi(4, base))
+		ultimate_button.text = "ULTIMATE\nREADY %s" % _format_compact_number(damage)
+		ultimate_button.tooltip_text = "Deal %d damage without consuming tiles" % damage
 	else:
-		ultimate_button.text = "ULTIMATE\nNeed 64+"
-		ultimate_button.tooltip_text = "Requires a 64+ tile"
+		ultimate_button.text = "ULTIMATE\n%d%%" % roundi(ultimate_gauge)
+		ultimate_button.tooltip_text = "Charge by merging tiles"
 
 
 func _format_compact_number(value: int) -> String:
@@ -1127,11 +1202,47 @@ func _format_compact_number(value: int) -> String:
 
 
 func _refresh_meta_ui() -> void:
-	meta_label.text = "Souls %d  |  Best %d  |  Power +%d%%" % [
-		save_manager.total_souls,
-		save_manager.best_stage,
-		save_manager.permanent_attack_level * 5,
-	]
+	meta_label.text = "RUN BUILD  |  %d upgrades" % run_state.upgrade_levels.size()
+
+
+func _refresh_phase2_ui() -> void:
+	ultimate_gauge_bar.value = ultimate_gauge
+	ultimate_gauge_label.text = "ULT %d%%" % roundi(ultimate_gauge)
+	core_label.text = "CORE +%d%%" % run_state.large_tile_bonus_percent
+	break_button.text = "BREAK\n%d/%d" % [run_state.break_current_charges, run_state.break_max_charges]
+	break_button.disabled = game_is_over or is_animating or stage_clear_pending or build_overlay.visible or run_state.break_current_charges <= 0 or logic.find_largest_tile_index(64) < 0
+
+
+func _update_large_tile_passive() -> void:
+	run_state.update_largest_tile(logic.get_largest_tile())
+
+
+func _set_ultimate_gauge(value: float) -> void:
+	var was_full := ultimate_gauge >= ULTIMATE_MAX
+	ultimate_gauge = clampf(value, 0.0, ULTIMATE_MAX)
+	if ultimate_gauge >= ULTIMATE_MAX and not was_full:
+		AudioManager.play_ultimate_full()
+	ultimate_was_full = ultimate_gauge >= ULTIMATE_MAX
+	if is_instance_valid(ultimate_gauge_bar):
+		var tween := create_tween()
+		tween.tween_property(ultimate_gauge_bar, "value", ultimate_gauge, 0.16)
+	_refresh_ultimate_button()
+	_refresh_phase2_ui()
+
+
+func _add_ultimate_charge(merged_values: Array) -> void:
+	var base_gain := 0.0
+	for raw: Variant in merged_values:
+		var value := int(raw)
+		base_gain += float(ULTIMATE_CHARGE.get(value, 35.0 if value >= 128 else 4.0))
+	base_gain *= 1.0 + float(maxi(0, merged_values.size() - 1)) * 0.12
+	var gain := run_state.get_ultimate_charge_gain(base_gain)
+	if ultimate_gauge >= ULTIMATE_MAX:
+		if run_state.get_upgrade_level("overflow") > 0:
+			run_state.overflow_stacks = mini(3, run_state.overflow_stacks + 1)
+		return
+	AudioManager.play_ultimate_charge()
+	_set_ultimate_gauge(ultimate_gauge + gain)
 
 
 func _finish_swipe() -> void:
@@ -1298,6 +1409,26 @@ func _animate_ultimate_tile(index: int) -> void:
 	await tween.finished
 	tile.modulate = Color.WHITE
 	tile.scale = Vector2.ONE
+
+
+func _animate_ultimate_gauge_burst() -> void:
+	_flash_screen(Color(1.0, 0.82, 0.2, 0.42), 0.38)
+	var tween := create_tween()
+	tween.tween_property(ultimate_button, "scale", Vector2(1.08, 1.08), 0.12)
+	tween.tween_property(ultimate_button, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_BACK)
+	await tween.finished
+
+
+func _animate_break_tile(index: int) -> void:
+	var tile := tile_panels[index]
+	tile.pivot_offset = tile.size * 0.5
+	var tween := create_tween()
+	tween.set_parallel(true)
+	tween.tween_property(tile, "scale", Vector2(0.0, 0.0), 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	tween.tween_property(tile, "modulate", Color("#74B9FF"), 0.18)
+	await tween.finished
+	tile.scale = Vector2.ONE
+	tile.modulate = Color.WHITE
 
 
 func _animate_attack_effect(
@@ -1486,6 +1617,7 @@ func _set_input_locked(locked: bool) -> void:
 	restart_button.disabled = locked
 	build_button.disabled = locked or stage_clear_pending
 	_refresh_ultimate_button()
+	_refresh_phase2_ui()
 
 
 func _damage_kind(
@@ -1506,44 +1638,41 @@ func _damage_kind(
 
 func _show_upgrade_selection() -> void:
 	input_enabled = false
+	upgrade_choice_committed = false
 	upgrade_overlay.visible = true
+	AudioManager.play_upgrade_open()
+	AudioManager.play_bgm("upgrade")
 	for child: Node in upgrade_cards_row.get_children():
 		child.queue_free()
 
 	var candidates: Array[String] = upgrade_system.generate_candidates(
 		rng, run_state, 3
 	)
+	if candidates.is_empty():
+		upgrade_overlay.visible = false
+		stage_clear_pending = false
+		stage += 1
+		run_state.current_stage = stage
+		_set_enemy_for_stage()
+		_set_input_locked(false)
+		return
 	for upgrade_id: String in candidates:
 		var definition: Dictionary = upgrade_system.get_definition(upgrade_id)
-		var card := Button.new()
-		card.custom_minimum_size = Vector2(210.0, 270.0)
-		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		card.text = "%s\n\n%s\n\n%s\n\n%s\nLevel %d" % [
-			str(definition["icon"]),
-			str(definition["name"]),
-			str(definition["description"]),
-			upgrade_system.get_change_text(upgrade_id, run_state),
-			run_state.get_upgrade_level(upgrade_id) + 1,
-		]
-		card.add_theme_font_size_override("font_size", 18)
-		card.add_theme_stylebox_override(
-			"normal", _create_box_style(Color("#F5EADB"), 15)
-		)
-		card.add_theme_stylebox_override(
-			"hover", _create_box_style(Color("#FFF4CD"), 15)
-		)
-		card.add_theme_color_override("font_color", Color("#4D443E"))
-		card.pressed.connect(_select_upgrade.bind(upgrade_id))
+		var card: UpgradeCard = UpgradeCardScript.new()
+		card.setup(definition, run_state.get_upgrade_level(upgrade_id))
+		card.upgrade_chosen.connect(_select_upgrade)
 		upgrade_cards_row.add_child(card)
 
 
 func _select_upgrade(upgrade_id: String) -> void:
-	if not upgrade_overlay.visible:
+	if not upgrade_overlay.visible or upgrade_choice_committed:
 		return
-	AudioManager.play_upgrade_select()
+	upgrade_choice_committed = true
+	var definition := upgrade_system.get_definition(upgrade_id)
+	AudioManager.play_upgrade_select(str(definition["rarity"]))
 	AudioManager.play_bgm("battle")
 	var previous_max_hp: int = run_state.get_player_max_hp()
-	run_state.apply_upgrade(upgrade_id)
+	upgrade_system.apply_upgrade(upgrade_id, run_state)
 	if run_state.get_player_max_hp() > previous_max_hp:
 		player_hp += run_state.get_player_max_hp() - previous_max_hp
 
@@ -1553,6 +1682,8 @@ func _select_upgrade(upgrade_id: String) -> void:
 	turn_count = 0
 	last_warning_turn = -1
 	stage_clear_pending = false
+	var preparation := run_state.begin_stage()
+	player_hp = mini(run_state.get_player_max_hp(), player_hp + int(preparation["heal"]))
 	_set_enemy_for_stage()
 	status_label.text = "%s selected — Stage %d" % [
 		str(upgrade_system.get_definition(upgrade_id)["name"]),
@@ -1567,8 +1698,8 @@ func _show_build_overlay() -> void:
 		return
 	AudioManager.play_ui_click()
 	input_enabled = false
-	build_details_label.text = _get_build_summary()
 	build_overlay.visible = true
+	build_panel.set_summary(_get_build_summary())
 
 
 func _hide_build_overlay() -> void:
@@ -1585,17 +1716,16 @@ func _toggle_sound() -> void:
 func _get_build_summary() -> String:
 	var lines: Array[String] = [
 		"Stage: %d" % stage,
-		"Attack: %.2fx" % run_state.attack_multiplier,
-		"Combo bonus: %.2fx" % run_state.combo_bonus_multiplier,
-		"Ultimate: %.2fx" % run_state.ultimate_multiplier,
+		"Attack bonus: +%d%%" % run_state.attack_bonus_percent,
+		"Combo bonus: +%d%%" % run_state.combo_bonus_percent,
+		"Max HP: %d" % run_state.get_player_max_hp(),
+		"Stage clear heal: %d" % run_state.stage_clear_heal,
+		"Ultimate damage: +%d%%" % run_state.ultimate_damage_bonus_percent,
+		"Ultimate charge: +%d%%" % run_state.ultimate_charge_bonus_percent,
 		"Enemy interval: %d moves" % run_state.get_enemy_attack_interval(),
-		"Permanent attack (this run): +%d%%" % roundi(
-			(run_state.permanent_attack_multiplier - 1.0) * 100.0
-		),
-		"Souls: %d    Best Stage: %d" % [
-			save_manager.total_souls, save_manager.best_stage
-		],
-		"Completed runs: %d" % save_manager.total_runs,
+		"Break: %d/%d" % [run_state.break_current_charges, run_state.break_max_charges],
+		"Shield: %d" % run_state.shield,
+		"Largest tile: %d / Core +%d%%" % [run_state.largest_tile, run_state.large_tile_bonus_percent],
 		"",
 		"UPGRADES",
 	]

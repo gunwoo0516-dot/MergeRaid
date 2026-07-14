@@ -1,0 +1,9 @@
+78098b89c88a74ebe8c20117b8754620
+::res://::1783958538
+README_KO.txt::TextFile::-1::1783958522::0::1::::<><><>0<>0<><>::
+::res://assets/::1783958522
+::res://scenes/::1783958522
+main.tscn::PackedScene::-1::1783958522::0::1::::<><><>0<>0<><>::res://scripts/main.gd
+::res://scripts/::1783958522
+board_logic.gd::GDScript::6702301892261205604::1783958522::0::1::::BoardLogic<>RefCounted<><>0<>0<><>::
+main.gd::GDScript::7426942885506605875::1783958522::0::1::::<>Control<><>0<>0<><>::

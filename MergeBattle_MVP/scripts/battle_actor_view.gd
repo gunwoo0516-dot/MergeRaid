@@ -98,6 +98,21 @@ func play_hit(damage: int, power: int = 1) -> void:
 	hit_tween.finished.connect(play_idle)
 
 
+func play_warning() -> void:
+	_stop_hit()
+	_stop_motion()
+	_stop_idle()
+	_reset_visual_state()
+	pivot_offset = size * 0.5
+	hit_tween = create_tween()
+	hit_tween.set_parallel(true)
+	hit_tween.tween_property(self, "scale", Vector2(1.07, 1.07), 0.07)
+	hit_tween.tween_property(self, "modulate", Color(1.25, 0.72, 0.45, 1.0), 0.07)
+	hit_tween.chain().tween_property(self, "scale", Vector2.ONE, 0.07)
+	hit_tween.parallel().tween_property(self, "modulate", Color.WHITE, 0.07)
+	hit_tween.finished.connect(play_idle)
+
+
 func play_death() -> void:
 	_stop_all_tweens()
 	pivot_offset = size * 0.5
@@ -134,6 +149,12 @@ func play_ultimate(target_position: Vector2, power: int) -> void:
 	motion_tween.chain().tween_property(self, "scale", Vector2.ONE, 0.08)
 	motion_tween.parallel().tween_property(self, "position", home_position, 0.08)
 	motion_tween.finished.connect(play_idle)
+
+
+func reset_visual_state() -> void:
+	_stop_all_tweens()
+	_reset_visual_state()
+	play_idle()
 
 
 func _capture_home_and_idle() -> void:

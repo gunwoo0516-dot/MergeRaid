@@ -33,6 +33,7 @@ var tile_labels: Array[Label] = []
 var score: int = 0
 var stage: int = 1
 var turn_count: int = 0
+var last_warning_turn: int = -1
 
 var player_hp: int = RunState.BASE_PLAYER_HP
 var enemy_hp: int = 0
@@ -60,6 +61,7 @@ var enemy_name_label: Label
 var enemy_hp_label: Label
 var enemy_hp_bar: ProgressBar
 var turn_label: Label
+var attack_interval_label: Label
 var status_label: Label
 var damage_label: Label
 var ultimate_button: Button
@@ -394,6 +396,12 @@ func _build_enemy_panel(parent: VBoxContainer) -> void:
 	turn_label.add_theme_color_override("font_color", Color("#713F39"))
 	enemy_title_row.add_child(turn_label)
 
+	attack_interval_label = Label.new()
+	attack_interval_label.text = "Enemy attacks every 3 moves"
+	attack_interval_label.add_theme_font_size_override("font_size", 14)
+	attack_interval_label.add_theme_color_override("font_color", Color("#8A5A52"))
+	enemy_box.add_child(attack_interval_label)
+
 	var enemy_hp_row := HBoxContainer.new()
 	enemy_box.add_child(enemy_hp_row)
 
@@ -685,6 +693,7 @@ func _start_new_game() -> void:
 	score = 0
 	stage = 1
 	turn_count = 0
+	last_warning_turn = -1
 	player_hp = run_state.get_player_max_hp()
 	game_is_over = false
 	input_enabled = true
@@ -699,6 +708,9 @@ func _start_new_game() -> void:
 	upgrade_overlay.visible = false
 	build_overlay.visible = false
 	restart_button.disabled = false
+	_clear_transient_effects()
+	player_actor.reset_visual_state()
+	enemy_actor.reset_visual_state()
 
 	_set_enemy_for_stage()
 	logic.spawn_random_tile(rng)
@@ -1009,6 +1021,7 @@ func _refresh_score_and_turn() -> void:
 		- (turn_count % run_state.get_enemy_attack_interval())
 	)
 	turn_label.text = "ATTACK IN %d" % turns_until_attack
+	attack_interval_label.text = "Enemy attacks every %d moves" % run_state.get_enemy_attack_interval()
 	for index in range(turn_indicators.size()):
 		var visible_indicator: bool = index < run_state.get_enemy_attack_interval()
 		turn_indicators[index].visible = visible_indicator
@@ -1017,6 +1030,14 @@ func _refresh_score_and_turn() -> void:
 		turn_indicators[index].add_theme_stylebox_override(
 			"panel", _create_box_style(color, 7)
 		)
+	if (
+		turns_until_attack == 1
+		and turn_count != last_warning_turn
+		and not game_is_over
+		and not stage_clear_pending
+	):
+		last_warning_turn = turn_count
+		enemy_actor.play_warning()
 
 
 func _refresh_player_ui() -> void:
@@ -1389,6 +1410,14 @@ func _set_attack_indicator_alert() -> void:
 		)
 
 
+func _clear_transient_effects() -> void:
+	for child: Node in effects_layer.get_children():
+		if child != screen_flash:
+			child.queue_free()
+	_kill_stored_tween(screen_flash, "flash_tween")
+	screen_flash.color.a = 0.0
+
+
 func _set_input_locked(locked: bool) -> void:
 	is_animating = locked
 	input_enabled = (
@@ -1464,6 +1493,7 @@ func _select_upgrade(upgrade_id: String) -> void:
 	stage += 1
 	run_state.current_stage = stage
 	turn_count = 0
+	last_warning_turn = -1
 	stage_clear_pending = false
 	_set_enemy_for_stage()
 	status_label.text = "%s selected — Stage %d" % [
